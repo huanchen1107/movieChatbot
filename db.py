@@ -1,7 +1,17 @@
+import os
+import shutil
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "output" / "movie.db"
+_IS_VERCEL = bool(os.environ.get("VERCEL"))
+
+_SOURCE_DB = Path(__file__).parent / "output" / "movie.db"
+_TMP_DB = Path("/tmp") / "movie.db"
+
+if _IS_VERCEL and _SOURCE_DB.exists() and not _TMP_DB.exists():
+    shutil.copy2(str(_SOURCE_DB), str(_TMP_DB))
+
+DB_PATH = _TMP_DB if _IS_VERCEL else _SOURCE_DB
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS movies (
@@ -23,7 +33,6 @@ CREATE INDEX IF NOT EXISTS idx_movies_name ON movies(name);
 def get_conn():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 

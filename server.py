@@ -151,6 +151,7 @@ def process_chat(message: str) -> dict:
 
 class ChatRequest(BaseModel):
     message: str
+    api_key: str = ""
 
 
 app = FastAPI(title="Movie API", docs_url="/docs")
@@ -281,8 +282,11 @@ def execute_tool(name, args):
 
 @app.post("/api/chat/gemini")
 def api_chat_gemini(req: ChatRequest):
-    if not gemini_client:
-        return {"type": "text", "text": "Gemini not configured. Set <code>GEMINI_API_KEY</code> environment variable."}
+    api_key = req.api_key or GEMINI_API_KEY
+    if not api_key:
+        return {"type": "text", "text": "No Gemini API key. Click the gear icon to set one, or set <code>GEMINI_API_KEY</code> env var."}
+
+    client = genai.Client(api_key=api_key)
 
     contents = [
         genai_types.Content(
@@ -305,7 +309,7 @@ def api_chat_gemini(req: ChatRequest):
     )
 
     try:
-        resp = gemini_client.models.generate_content(
+        resp = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=contents,
             config=config,
@@ -337,7 +341,7 @@ def api_chat_gemini(req: ChatRequest):
             ))
 
             try:
-                resp2 = gemini_client.models.generate_content(
+                resp2 = client.models.generate_content(
                     model="gemini-2.0-flash",
                     contents=contents,
                     config=config,
@@ -360,7 +364,7 @@ def api_chat_gemini(req: ChatRequest):
 
 @app.get("/api/chat/gemini/status")
 def api_gemini_status():
-    return {"available": gemini_client is not None}
+    return {"available": bool(gemini_client or GEMINI_API_KEY)}
 
 
 @app.get("/api/search")
