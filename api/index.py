@@ -2,6 +2,8 @@ import os
 import sys
 import re
 import json
+import urllib.request
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,14 +18,7 @@ movies = load_movies()
 all_categories = load_all_categories()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-gemini_client = None
-if GEMINI_API_KEY:
-    try:
-        from google import genai
-        from google.genai import types as genai_types
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    except ImportError:
-        pass
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 
 def jaccard(set_a, set_b):
@@ -74,6 +69,51 @@ def search_movies_local(keyword):
 def format_movie_html(m):
     cats = " / ".join(m["categories"])
     return f'<div class="chat-movie"><img src="{m["cover"]}" onerror="this.style.display=\'none\'"><div><b>[{m["id"]}] {m["name"]}</b><br><small>Score: {m["score"]} | {cats}<br>{m["country"]} | {m["duration"]} | {m["release_date"]}</small></div></div>'
+
+
+SYSTEM_PROMPT = """You are a friendly movie assistant with access to a database of 100 movies.
+The database includes Chinese and international films. Each movie has: id, name (Chinese + English), categories/genres, country, duration, release_date, and score (out of 10).
+Categories available: """ + ", ".join(all_categories) + """
+When users ask about movies, use the available tools to search, rank, or find movies. Answer in Chinese unless the user asks in English. Be concise but enthusiastic."""
+
+TOOLS = [
+    {"name": "search_movies", "description": "Search movies by keyword in name, country, or category", "parameters": {"type": "object", "properties": {"keyword": {"type": "string"}}, "required": ["keyword"]}},
+    {"name": "rank_by_categories", "description": "Rank movies by preferred categories using similarity", "parameters": {"type": "object", "properties": {"categories": {"type": "string"}, "top_n": {"type": "integer"}}, "required": ["categories"]}},
+    {"name": "top_movies", "description": "Get top movies by score", "parameters": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}},
+    {"name": "find_similar", "description": "Find movies similar to a given movie name or ID", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "list_categories", "description": "List all available movie categories", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_stats", "description": "Get database statistics", "parameters": {"type": "object", "properties": {}}},
+]
+
+OPENAI_TOOLS = [
+    {"type": "function", "function": t} for t in TOOLS
+]
+
+
+def execute_tool(name, args):
+    if name == "search_movies":
+        results = search_movies_local(args["keyword"])
+        return [{"id": m["id"], "name": m["name"], "score": m["score"], "categories": m["categories"], "country": m["country"], "duration": m["duration"], "release_date": m["release_date"]} for m in results[:10]]
+    elif name == "rank_by_categories":
+        cats = [c.strip() for c in args["categories"].split(",") if c.strip()]
+        top_n = min(args.get("top_n", 10), 10)
+        results = rank_by_categories(cats, top_n)
+        return [{"id": m["id"], "name": m["name"], "score": m["score"], "categories": m["categories"], "country": m["country"]} for m in results]
+    elif name == "top_movies":
+        n = min(args.get("n", 10), 20)
+        results = sorted(movies, key=lambda x: x["score"], reverse=True)[:n]
+        return [{"id": m["id"], "name": m["name"], "score": m["score"], "categories": m["categories"]} for m in results]
+    elif name == "find_similar":
+        target, results = similar_movies(args["query"])
+        if target is None:
+            return {"error": "Movie not found"}
+        return {"target": {"id": target["id"], "name": target["name"], "score": target["score"]}, "similar": [{"id": m["id"], "name": m["name"], "score": m["score"]} for m in results[:8]]}
+    elif name == "list_categories":
+        return {"categories": all_categories}
+    elif name == "get_stats":
+        avg = sum(m["score"] for m in movies) / len(movies)
+        return {"total": len(movies), "avg_score": round(avg, 2), "categories_count": len(all_categories)}
+    return {}
 
 
 def process_chat(message):
@@ -148,6 +188,7 @@ def process_chat(message):
 class ChatRequest(BaseModel):
     message: str
     api_key: str = ""
+    provider: str = "gemini"
 
 
 app = FastAPI(title="Movie API", docs_url="/docs")
@@ -255,53 +296,25 @@ def api_chat(req: ChatRequest):
     return process_chat(req.message)
 
 
-GEMINI_SYSTEM_PROMPT = """You are a friendly movie assistant with access to a database of 100 movies.
-The database includes Chinese and international films. Each movie has: id, name (Chinese + English), categories/genres, country, duration, release_date, and score (out of 10).
-Categories available: """ + ", ".join(all_categories) + """
-When users ask about movies, use the available tools to search, rank, or find movies. Answer in Chinese unless the user asks in English. Be concise but enthusiastic. Recommend movies naturally."""
+@app.post("/api/chat/ai")
+def api_chat_ai(req: ChatRequest):
+    provider = req.provider.lower()
+    api_key = req.api_key or os.environ.get("OPENAI_API_KEY", "") or GEMINI_API_KEY
 
-GEMINI_TOOLS = [
-    {"name": "search_movies", "description": "Search movies by keyword in name, country, or category", "parameters": {"type": "object", "properties": {"keyword": {"type": "string"}}, "required": ["keyword"]}},
-    {"name": "rank_by_categories", "description": "Rank movies by preferred categories using similarity", "parameters": {"type": "object", "properties": {"categories": {"type": "string"}, "top_n": {"type": "integer"}}, "required": ["categories"]}},
-    {"name": "top_movies", "description": "Get top movies by score", "parameters": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}},
-    {"name": "find_similar", "description": "Find movies similar to a given movie name or ID", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-    {"name": "list_categories", "description": "List all available movie categories", "parameters": {"type": "object", "properties": {}}},
-    {"name": "get_stats", "description": "Get database statistics", "parameters": {"type": "object", "properties": {}}},
-]
-
-
-def execute_tool(name, args):
-    if name == "search_movies":
-        results = search_movies_local(args["keyword"])
-        return [{"id": m["id"], "name": m["name"], "score": m["score"], "categories": m["categories"], "country": m["country"], "duration": m["duration"], "release_date": m["release_date"]} for m in results[:10]]
-    elif name == "rank_by_categories":
-        cats = [c.strip() for c in args["categories"].split(",") if c.strip()]
-        top_n = min(args.get("top_n", 10), 10)
-        results = rank_by_categories(cats, top_n)
-        return [{"id": m["id"], "name": m["name"], "score": m["score"], "categories": m["categories"], "country": m["country"]} for m in results]
-    elif name == "top_movies":
-        n = min(args.get("n", 10), 20)
-        results = sorted(movies, key=lambda x: x["score"], reverse=True)[:n]
-        return [{"id": m["id"], "name": m["name"], "score": m["score"], "categories": m["categories"]} for m in results]
-    elif name == "find_similar":
-        target, results = similar_movies(args["query"])
-        if target is None:
-            return {"error": "Movie not found"}
-        return {"target": {"id": target["id"], "name": target["name"], "score": target["score"]}, "similar": [{"id": m["id"], "name": m["name"], "score": m["score"]} for m in results[:8]]}
-    elif name == "list_categories":
-        return {"categories": all_categories}
-    elif name == "get_stats":
-        avg = sum(m["score"] for m in movies) / len(movies)
-        return {"total": len(movies), "avg_score": round(avg, 2), "categories_count": len(all_categories)}
-    return {}
-
-
-@app.post("/api/chat/gemini")
-def api_chat_gemini(req: ChatRequest):
-    api_key = req.api_key or GEMINI_API_KEY
     if not api_key:
-        return {"type": "text", "text": "No Gemini API key. Click the gear icon to set one, or set <code>GEMINI_API_KEY</code> env var."}
+        return {"type": "text", "text": f"No API key for {provider}. Click the gear icon to set one."}
 
+    if provider == "gemini":
+        return _chat_gemini(req.message, api_key)
+    elif provider == "openai":
+        return _chat_openai(req.message, api_key)
+    elif provider == "opencode":
+        return _chat_opencode(req.message, api_key)
+    else:
+        return {"type": "text", "text": f"Unknown provider: {provider}. Use 'gemini', 'openai', or 'opencode'."}
+
+
+def _chat_gemini(message, api_key):
     try:
         from google import genai
         from google.genai import types as genai_types
@@ -309,14 +322,13 @@ def api_chat_gemini(req: ChatRequest):
         return {"type": "text", "text": "Gemini SDK not installed."}
 
     client = genai.Client(api_key=api_key)
-
-    contents = [genai_types.Content(role="user", parts=[genai_types.Part(text=req.message)])]
+    contents = [genai_types.Content(role="user", parts=[genai_types.Part(text=message)])]
 
     config = genai_types.GenerateContentConfig(
-        system_instruction=GEMINI_SYSTEM_PROMPT,
+        system_instruction=SYSTEM_PROMPT,
         tools=[genai_types.Tool(function_declarations=[
             genai_types.FunctionDeclaration(name=t["name"], description=t["description"], parameters=t["parameters"])
-            for t in GEMINI_TOOLS
+            for t in TOOLS
         ])],
         temperature=0.7,
         max_output_tokens=800,
@@ -340,7 +352,6 @@ def api_chat_gemini(req: ChatRequest):
             function_response = genai_types.Part.from_function_response(name=fc.name, response={"result": result})
             contents.append(genai_types.Content(role="model", parts=[part]))
             contents.append(genai_types.Content(role="user", parts=[function_response]))
-
             try:
                 resp2 = client.models.generate_content(model="gemini-2.0-flash", contents=contents, config=config)
                 if resp2.candidates and resp2.candidates[0].content:
@@ -348,9 +359,8 @@ def api_chat_gemini(req: ChatRequest):
                     text = "\n".join(text_parts) if text_parts else json.dumps(result, ensure_ascii=False)
                 else:
                     text = json.dumps(result, ensure_ascii=False)
-            except Exception as e:
+            except Exception:
                 text = json.dumps(result, ensure_ascii=False)
-
             return {"type": "text", "text": text.replace("\n", "<br>")}
 
     text_parts = [p.text for p in parts if p.text]
@@ -358,6 +368,102 @@ def api_chat_gemini(req: ChatRequest):
     return {"type": "text", "text": text.replace("\n", "<br>")}
 
 
-@app.get("/api/chat/gemini/status")
-def api_gemini_status():
-    return {"available": bool(gemini_client or os.environ.get("GEMINI_API_KEY"))}
+def _chat_openai(message, api_key):
+    url = "https://api.openai.com/v1/chat/completions"
+    return _chat_openai_compatible(url, api_key, message, "gpt-4o-mini")
+
+
+def _chat_opencode(message, api_key):
+    url = "https://opencode.ai/zen/v1/chat/completions"
+    return _chat_openai_compatible(url, api_key, message, "deepseek-v4-flash-free")
+
+
+def _chat_openai_compatible(base_url, api_key, message, model):
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": message},
+    ]
+
+    body = json.dumps({
+        "model": model,
+        "messages": messages,
+        "tools": OPENAI_TOOLS,
+        "temperature": 0.7,
+        "max_tokens": 800,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        base_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        return {"type": "text", "text": f"API error ({e.code}): {err[:500]}"}
+    except Exception as e:
+        return {"type": "text", "text": f"Request error: {e}"}
+
+    choice = data.get("choices", [{}])[0]
+    msg = choice.get("message", {})
+
+    tool_calls = msg.get("tool_calls", [])
+    if tool_calls:
+        messages.append(msg)
+        for tc in tool_calls:
+            func_name = tc["function"]["name"]
+            func_args = json.loads(tc["function"]["arguments"])
+            result = execute_tool(func_name, func_args)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+
+        body2 = json.dumps({
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 800,
+        }).encode("utf-8")
+
+        req2 = urllib.request.Request(
+            base_url,
+            data=body2,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req2, timeout=30) as resp2:
+                data2 = json.loads(resp2.read().decode("utf-8"))
+            choice2 = data2.get("choices", [{}])[0]
+            text = choice2.get("message", {}).get("content", json.dumps(result, ensure_ascii=False))
+        except Exception:
+            text = json.dumps(result, ensure_ascii=False)
+
+        return {"type": "text", "text": text.replace("\n", "<br>")}
+
+    text = msg.get("content", "I'm not sure how to help with that.")
+    return {"type": "text", "text": text.replace("\n", "<br>")}
+
+
+@app.get("/api/chat/ai/status")
+def api_ai_status():
+    return {
+        "providers": {
+            "gemini": bool(GEMINI_API_KEY),
+            "openai": bool(OPENAI_API_KEY),
+            "opencode": True,
+        }
+    }

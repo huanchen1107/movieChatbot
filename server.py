@@ -2,6 +2,8 @@ import csv
 import re
 import json
 import os
+import urllib.request
+import urllib.error
 import uvicorn
 from pathlib import Path
 from fastapi import FastAPI, Query
@@ -23,6 +25,7 @@ if env_file.exists():
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 movies = load_movies()
@@ -152,6 +155,7 @@ def process_chat(message: str) -> dict:
 class ChatRequest(BaseModel):
     message: str
     api_key: str = ""
+    provider: str = "gemini"
 
 
 app = FastAPI(title="Movie API", docs_url="/docs")
@@ -365,6 +369,176 @@ def api_chat_gemini(req: ChatRequest):
 @app.get("/api/chat/gemini/status")
 def api_gemini_status():
     return {"available": bool(gemini_client or GEMINI_API_KEY)}
+
+
+@app.post("/api/chat/ai")
+def api_chat_ai(req: ChatRequest):
+    provider = req.provider.lower()
+    api_key = req.api_key or OPENAI_API_KEY or GEMINI_API_KEY
+
+    if not api_key:
+        return {"type": "text", "text": f"No API key for {provider}. Click the gear icon to set one."}
+
+    if provider == "gemini":
+        return _chat_gemini(req.message, api_key)
+    elif provider == "openai":
+        return _chat_openai(req.message, api_key)
+    elif provider == "opencode":
+        return _chat_opencode(req.message, api_key)
+    else:
+        return {"type": "text", "text": f"Unknown provider: {provider}. Use 'gemini', 'openai', or 'opencode'."}
+
+
+OPENAI_TOOLS = [
+    {"type": "function", "function": t} for t in gemini_tools
+]
+
+
+def _chat_gemini(message, api_key):
+    client = genai.Client(api_key=api_key)
+    contents = [genai_types.Content(role="user", parts=[genai_types.Part(text=message)])]
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=gemini_system_prompt,
+        tools=[genai_types.Tool(function_declarations=[
+            genai_types.FunctionDeclaration(name=t["name"], description=t["description"], parameters=t["parameters"])
+            for t in gemini_tools
+        ])],
+        temperature=0.7,
+        max_output_tokens=800,
+    )
+
+    try:
+        resp = client.models.generate_content(model="gemini-2.0-flash", contents=contents, config=config)
+    except Exception as e:
+        return {"type": "text", "text": f"Gemini error: {e}"}
+
+    if not resp.candidates:
+        return {"type": "text", "text": "No response from Gemini."}
+
+    candidate = resp.candidates[0]
+    parts = candidate.content.parts if candidate.content else []
+
+    for part in parts:
+        if part.function_call:
+            fc = part.function_call
+            result = execute_tool(fc.name, dict(fc.args))
+            function_response = genai_types.Part.from_function_response(name=fc.name, response={"result": result})
+            contents.append(genai_types.Content(role="model", parts=[part]))
+            contents.append(genai_types.Content(role="user", parts=[function_response]))
+            try:
+                resp2 = client.models.generate_content(model="gemini-2.0-flash", contents=contents, config=config)
+                if resp2.candidates and resp2.candidates[0].content:
+                    text_parts = [p.text for p in resp2.candidates[0].content.parts if p.text]
+                    text = "\n".join(text_parts) if text_parts else json.dumps(result, ensure_ascii=False)
+                else:
+                    text = json.dumps(result, ensure_ascii=False)
+            except Exception:
+                text = json.dumps(result, ensure_ascii=False)
+            return {"type": "text", "text": text.replace("\n", "<br>")}
+
+    text_parts = [p.text for p in parts if p.text]
+    text = "\n".join(text_parts) if text_parts else "I'm not sure how to help with that."
+    return {"type": "text", "text": text.replace("\n", "<br>")}
+
+
+def _chat_openai(message, api_key):
+    return _chat_openai_compatible("https://api.openai.com/v1/chat/completions", api_key, message, "gpt-4o-mini")
+
+
+def _chat_opencode(message, api_key):
+    return _chat_openai_compatible("https://opencode.ai/zen/v1/chat/completions", api_key, message, "deepseek-v4-flash-free")
+
+
+def _chat_openai_compatible(base_url, api_key, message, model):
+    messages = [
+        {"role": "system", "content": gemini_system_prompt},
+        {"role": "user", "content": message},
+    ]
+
+    body = json.dumps({
+        "model": model,
+        "messages": messages,
+        "tools": OPENAI_TOOLS,
+        "temperature": 0.7,
+        "max_tokens": 800,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        base_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        return {"type": "text", "text": f"API error ({e.code}): {err[:500]}"}
+    except Exception as e:
+        return {"type": "text", "text": f"Request error: {e}"}
+
+    choice = data.get("choices", [{}])[0]
+    msg = choice.get("message", {})
+
+    tool_calls = msg.get("tool_calls", [])
+    if tool_calls:
+        messages.append(msg)
+        for tc in tool_calls:
+            func_name = tc["function"]["name"]
+            func_args = json.loads(tc["function"]["arguments"])
+            result = execute_tool(func_name, func_args)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+
+        body2 = json.dumps({
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 800,
+        }).encode("utf-8")
+
+        req2 = urllib.request.Request(
+            base_url,
+            data=body2,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req2, timeout=30) as resp2:
+                data2 = json.loads(resp2.read().decode("utf-8"))
+            choice2 = data2.get("choices", [{}])[0]
+            text = choice2.get("message", {}).get("content", json.dumps(result, ensure_ascii=False))
+        except Exception:
+            text = json.dumps(result, ensure_ascii=False)
+
+        return {"type": "text", "text": text.replace("\n", "<br>")}
+
+    text = msg.get("content", "I'm not sure how to help with that.")
+    return {"type": "text", "text": text.replace("\n", "<br>")}
+
+
+@app.get("/api/chat/ai/status")
+def api_ai_status():
+    return {
+        "providers": {
+            "gemini": bool(gemini_client or GEMINI_API_KEY),
+            "openai": bool(OPENAI_API_KEY),
+            "opencode": True,
+        }
+    }
 
 
 @app.get("/api/search")

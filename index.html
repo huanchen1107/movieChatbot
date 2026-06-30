@@ -127,9 +127,15 @@ body{font-family:'Microsoft YaHei',sans-serif;background:#f0f2f5;color:#333}
 <div class="modal-overlay" id="settingsModal">
   <div class="modal">
     <h3>&#9881; Settings</h3>
-    <label for="apiKey">Gemini API Key</label>
-    <input id="apiKey" type="password" placeholder="Enter your Gemini API key...">
-    <div class="hint">
+    <label for="providerSelect">AI Provider</label>
+    <select id="providerSelect" onchange="onProviderChange()" style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:16px;outline:none;cursor:pointer">
+      <option value="gemini">Gemini (Google)</option>
+      <option value="openai">OpenAI</option>
+      <option value="opencode">OpenCode Go</option>
+    </select>
+    <label for="apiKey">API Key</label>
+    <input id="apiKey" type="password" placeholder="Enter your API key...">
+    <div class="hint" id="keyHint">
       Get a key from <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#1967d2">Google AI Studio</a>.
       Your key is saved only in your browser.
       <span class="saved-indicator" id="keyIndicator"></span>
@@ -143,14 +149,39 @@ body{font-family:'Microsoft YaHei',sans-serif;background:#f0f2f5;color:#333}
 
 <script>
 var activeCats = [];
-var geminiMode = false;
+var aiMode = false;
+var aiProvider = localStorage.getItem("ai_provider") || "gemini";
 
-var storedKey = localStorage.getItem("gemini_api_key") || "";
+var storedKey = localStorage.getItem("ai_key_" + aiProvider) || "";
 document.getElementById("apiKey").value = storedKey;
+document.getElementById("providerSelect").value = aiProvider;
 updateKeyIndicator();
+updateProviderUI();
+
+function onProviderChange() {
+  aiProvider = document.getElementById("providerSelect").value;
+  storedKey = localStorage.getItem("ai_key_" + aiProvider) || "";
+  document.getElementById("apiKey").value = storedKey;
+  updateKeyIndicator();
+  updateKeyHint();
+}
+
+function updateKeyHint() {
+  var hint = document.getElementById("keyHint");
+  var links = {
+    gemini: 'Get a key from <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#1967d2">Google AI Studio</a>.',
+    openai: 'Get a key from <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#1967d2">OpenAI Platform</a>.',
+    opencode: 'Get a key from <a href="https://opencode.ai/auth" target="_blank" style="color:#1967d2">OpenCode</a> (free plan available).'
+  };
+  hint.innerHTML = (links[aiProvider] || links.gemini) +
+    ' Your key is saved only in your browser. ' +
+    '<span class="saved-indicator" id="keyIndicator"></span>';
+  updateKeyIndicator();
+}
 
 function updateKeyIndicator() {
   var ind = document.getElementById("keyIndicator");
+  if (!ind) return;
   if (storedKey) {
     ind.className = "saved-indicator set";
     ind.title = "API key set";
@@ -160,8 +191,16 @@ function updateKeyIndicator() {
   }
 }
 
+function updateProviderUI() {
+  var names = { gemini: "Gemini", openai: "OpenAI", opencode: "OpenCode" };
+  document.getElementById("modeBtn").textContent = names[aiProvider] || "AI";
+}
+
 function openSettings() {
+  document.getElementById("providerSelect").value = aiProvider;
+  storedKey = localStorage.getItem("ai_key_" + aiProvider) || "";
   document.getElementById("apiKey").value = storedKey;
+  updateKeyHint();
   document.getElementById("settingsModal").classList.add("open");
   setTimeout(function() { document.getElementById("apiKey").focus(); }, 100);
 }
@@ -171,31 +210,30 @@ function closeSettings() {
 }
 
 function saveSettings() {
+  aiProvider = document.getElementById("providerSelect").value;
   var key = document.getElementById("apiKey").value.trim();
   storedKey = key;
-  localStorage.setItem("gemini_api_key", key);
+  localStorage.setItem("ai_provider", aiProvider);
+  localStorage.setItem("ai_key_" + aiProvider, key);
   updateKeyIndicator();
+  updateProviderUI();
   closeSettings();
 }
 
 function toggleMode() {
-  if (!storedKey && !geminiMode) {
+  if (!storedKey && !aiMode) {
     openSettings();
     return;
   }
-  geminiMode = !geminiMode;
+  aiMode = !aiMode;
   var btn = document.getElementById("modeBtn");
   var label = document.getElementById("modeLabel");
-  if (geminiMode) {
+  var names = { gemini: "Gemini", openai: "OpenAI", opencode: "OpenCode" };
+  if (aiMode) {
     btn.textContent = "Basic";
-    label.textContent = "(Gemini AI)";
+    label.textContent = "(" + (names[aiProvider] || "AI") + ")";
   } else {
-    btn.textContent = "Gemini";
-    label.textContent = "(basic)";
-  }
-  if (geminiMode && !storedKey) {
-    geminiMode = false;
-    btn.textContent = "Gemini";
+    btn.textContent = names[aiProvider] || "AI";
     label.textContent = "(basic)";
   }
 }
@@ -227,11 +265,12 @@ function sendChat() {
   msgs.innerHTML += '<div class="typing"><span></span><span></span><span></span></div>';
   msgs.scrollTop = msgs.scrollHeight;
 
-  var url = geminiMode ? "/api/chat/gemini" : "/api/chat";
+  var url = aiMode ? "/api/chat/ai" : "/api/chat";
   var body = {message: msg};
 
-  if (geminiMode && storedKey) {
+  if (aiMode && storedKey) {
     body.api_key = storedKey;
+    body.provider = aiProvider;
   }
 
   fetch(url, {
