@@ -268,9 +268,14 @@ function sendChat() {
   var url = aiMode ? "/api/chat/ai" : "/api/chat";
   var body = {message: msg};
 
-  if (aiMode && storedKey) {
+  if (aiMode) {
     body.api_key = storedKey;
     body.provider = aiProvider;
+    body.keys = {};
+    ["gemini", "openai", "opencode"].forEach(function(p) {
+      var k = localStorage.getItem("ai_key_" + p);
+      if (k) body.keys[p] = k;
+    });
   }
 
   fetch(url, {
@@ -281,11 +286,16 @@ function sendChat() {
   .then(function(r) { return r.json(); })
   .then(function(data) {
     msgs.removeChild(msgs.lastChild);
+    var prefix = "";
+    if (data.provider) {
+      var names = {gemini:"Gemini", openai:"OpenAI", opencode:"OpenCode"};
+      prefix = '<span style="font-size:10px;color:#999">via ' + (names[data.provider]||data.provider) + '</span><br>';
+    }
     if (data.type === "movies") {
-      msgs.innerHTML += '<div class="chat-msg bot">' + data.text + '</div>';
+      msgs.innerHTML += '<div class="chat-msg bot">' + prefix + data.text + '</div>';
       if (data.movies) renderGrid(data.movies);
     } else {
-      msgs.innerHTML += '<div class="chat-msg bot">' + data.text + '</div>';
+      msgs.innerHTML += '<div class="chat-msg bot">' + prefix + data.text + '</div>';
     }
     msgs.scrollTop = msgs.scrollHeight;
   })

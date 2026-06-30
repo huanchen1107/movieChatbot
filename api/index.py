@@ -189,6 +189,7 @@ class ChatRequest(BaseModel):
     message: str
     api_key: str = ""
     provider: str = "gemini"
+    keys: dict = {}
 
 
 app = FastAPI(title="Movie API", docs_url="/docs")
@@ -298,20 +299,42 @@ def api_chat(req: ChatRequest):
 
 @app.post("/api/chat/ai")
 def api_chat_ai(req: ChatRequest):
-    provider = req.provider.lower()
-    api_key = req.api_key or os.environ.get("OPENAI_API_KEY", "") or GEMINI_API_KEY
+    keys = req.keys or {}
+    if req.api_key:
+        keys[req.provider] = req.api_key
+    keys["gemini"] = keys.get("gemini", "") or GEMINI_API_KEY
+    keys["openai"] = keys.get("openai", "") or os.environ.get("OPENAI_API_KEY", "")
 
-    if not api_key:
-        return {"type": "text", "text": f"No API key for {provider}. Click the gear icon to set one."}
+    preferred_order = [req.provider] + [p for p in ["opencode", "gemini", "openai"] if p != req.provider]
 
-    if provider == "gemini":
-        return _chat_gemini(req.message, api_key)
-    elif provider == "openai":
-        return _chat_openai(req.message, api_key)
-    elif provider == "opencode":
-        return _chat_opencode(req.message, api_key)
-    else:
-        return {"type": "text", "text": f"Unknown provider: {provider}. Use 'gemini', 'openai', or 'opencode'."}
+    for provider in preferred_order:
+        api_key = keys.get(provider, "").strip()
+        if not api_key:
+            continue
+
+        try:
+            if provider == "gemini":
+                result = _chat_gemini(req.message, api_key)
+            elif provider == "openai":
+                result = _chat_openai(req.message, api_key)
+            elif provider == "opencode":
+                result = _chat_opencode(req.message, api_key)
+            else:
+                continue
+        except Exception:
+            continue
+
+        text = result.get("text", "")
+        if "429" in text or "503" in text or "rate limit" in text.lower() or "quota" in text.lower() or "RESOURCE_EXHAUSTED" in text:
+            continue
+
+        if result.get("type") == "text" and any(x in text for x in ["error:", "Error:", "API error"]):
+            continue
+
+        result["provider"] = provider
+        return result
+
+    return {"type": "text", "text": "All AI providers unavailable. Use <b>Basic</b> mode or check your API keys in Settings."}
 
 
 def _chat_gemini(message, api_key):
