@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Movie Database</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Microsoft YaHei',sans-serif;background:#f0f2f5;color:#333}
+.header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:20px 0;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.header h1{text-align:center;font-size:24px;margin-bottom:12px}
+.search-bar{display:flex;gap:8px;max-width:800px;margin:0 auto;padding:0 16px}
+.search-bar input{flex:1;padding:10px 16px;border:none;border-radius:6px;font-size:15px;outline:none}
+.search-bar button{padding:10px 20px;border:none;border-radius:6px;background:#e94560;color:#fff;font-size:15px;cursor:pointer;font-weight:bold}
+.search-bar button:hover{background:#d63a54}
+#cats{max-width:800px;margin:12px auto 0;padding:0 16px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.tag{background:rgba(255,255,255,.15);padding:4px 12px;border-radius:14px;font-size:13px;cursor:pointer;transition:background .2s;color:#fff}
+.tag:hover,.tag.active{background:rgba(255,255,255,.35)}
+.chat-tag{display:inline-block;background:#e8f0fe;color:#1967d2;padding:2px 8px;border-radius:4px;margin:2px;font-size:12px}
+.container{max-width:1000px;margin:0 auto;padding:20px 16px}
+.stats{text-align:center;margin-bottom:16px;color:#666;font-size:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.card{background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);transition:transform .2s,box-shadow .2s;display:flex;flex-direction:column}
+.card:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.card-img{width:100%;height:200px;object-fit:cover;background:#e8e8e8}
+.card-body{padding:14px;flex:1;display:flex;flex-direction:column;gap:6px}
+.card-body h3{font-size:15px;line-height:1.3;color:#1a1a2e}
+.card-meta{font-size:12px;color:#888;display:flex;gap:10px;flex-wrap:wrap}
+.card-meta span{background:#f0f2f5;padding:2px 8px;border-radius:4px;white-space:nowrap}
+.card-score{display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:8px}
+.score-badge{background:linear-gradient(135deg,#e94560,#c23152);color:#fff;padding:4px 12px;border-radius:14px;font-size:14px;font-weight:bold}
+.cats-inline{display:flex;gap:4px;flex-wrap:wrap}
+.cats-inline span{background:#e8f0fe;color:#1967d2;font-size:11px;padding:2px 8px;border-radius:4px}
+#loading{text-align:center;padding:40px;color:#999;display:none}
+
+.chat-btn{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#e94560,#c23152);border:none;color:#fff;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(233,69,96,.4);z-index:999;display:flex;align-items:center;justify-content:center;transition:transform .2s;font-weight:bold}
+.chat-btn:hover{transform:scale(1.1)}
+.chat-panel{position:fixed;bottom:90px;right:24px;width:380px;height:520px;background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.15);display:none;flex-direction:column;z-index:998;overflow:hidden}
+.chat-panel.open{display:flex}
+.chat-header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+.chat-header h3{font-size:16px}
+.chat-header button{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;opacity:.7}
+.chat-header button:hover{opacity:1}
+.chat-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#f8f9fa}
+.chat-msg{max-width:90%;padding:10px 14px;border-radius:12px;font-size:13px;line-height:1.5;word-wrap:break-word;animation:fadeIn .2s}
+.chat-msg.bot{align-self:flex-start;background:#fff;border:1px solid #e8e8e8;border-bottom-left-radius:4px}
+.chat-msg.user{align-self:flex-end;background:#e94560;color:#fff;border-bottom-right-radius:4px}
+.chat-msg code{background:rgba(0,0,0,.06);padding:2px 6px;border-radius:4px;font-size:12px}
+.chat-msg .chat-movie{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #eee}
+.chat-msg .chat-movie:last-child{border-bottom:none}
+.chat-msg .chat-movie img{width:48px;height:64px;object-fit:cover;border-radius:4px;flex-shrink:0}
+.chat-msg .chat-movie div{flex:1;min-width:0}
+.chat-msg b{color:#1a1a2e}
+.chat-input{display:flex;padding:10px 14px;gap:8px;border-top:1px solid #eee;background:#fff}
+.chat-input input{flex:1;padding:10px 14px;border:1px solid #ddd;border-radius:20px;font-size:14px;outline:none}
+.chat-input input:focus{border-color:#e94560}
+.chat-input button{border:none;background:linear-gradient(135deg,#e94560,#c23152);color:#fff;border-radius:20px;padding:10px 18px;font-size:14px;cursor:pointer;font-weight:bold}
+.typing{display:flex;gap:4px;padding:10px 14px;align-self:flex-start}
+.typing span{width:6px;height:6px;background:#aaa;border-radius:50%;animation:bounce 1.4s infinite ease-in-out both}
+.typing span:nth-child(1){animation-delay:-.32s}
+.typing span:nth-child(2){animation-delay:-.16s}
+@keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+.gear-btn{background:none;border:none;color:#fff;font-size:18px;cursor:pointer;opacity:.7;padding:2px 4px;transition:opacity .2s,transform .2s}
+.gear-btn:hover{opacity:1;transform:rotate(30deg)}
+
+.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:2000;display:none;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:#fff;border-radius:16px;width:400px;max-width:90vw;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+.modal h3{font-size:18px;margin-bottom:16px;color:#1a1a2e}
+.modal label{display:block;font-size:13px;color:#666;margin-bottom:6px}
+.modal input{width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:16px;outline:none;font-family:monospace}
+.modal input:focus{border-color:#e94560}
+.modal .hint{font-size:11px;color:#999;margin-top:-10px;margin-bottom:14px}
+.modal .btn-row{display:flex;gap:8px;justify-content:flex-end}
+.modal .btn-row button{padding:8px 20px;border-radius:8px;font-size:14px;cursor:pointer;border:none;font-weight:bold}
+.modal .btn-save{background:linear-gradient(135deg,#e94560,#c23152);color:#fff}
+.modal .btn-cancel{background:#f0f2f5;color:#666}
+.modal .saved-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px}
+.modal .saved-indicator.set{background:#4caf50}
+.modal .saved-indicator.unset{background:#ff9800}
+
+@media(max-width:600px){.grid{grid-template-columns:1fr}.chat-panel{width:calc(100vw - 32px);right:16px;bottom:80px;height:460px}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Movie Database</h1>
+  <div class="search-bar">
+    <input id="search" type="text" placeholder="Search movies... (name, country, category)">
+    <button onclick="doSearch()">Search</button>
+  </div>
+  <div id="cats">__CATS__</div>
+</div>
+
+<div class="container">
+  <div class="stats" id="stats"></div>
+  <div id="loading">Loading...</div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<button class="chat-btn" onclick="toggleChat()" title="Movie Chatbot">Chat</button>
+
+<div class="chat-panel" id="chatPanel">
+  <div class="chat-header">
+    <h3>Movie Chatbot <span id="modeLabel" style="font-size:11px;opacity:.7">(basic)</span></h3>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button id="modeBtn" onclick="toggleMode()" style="font-size:11px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;padding:4px 10px;border-radius:12px;cursor:pointer">Gemini</button>
+      <button class="gear-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+      <button onclick="toggleChat()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;opacity:.7">&times;</button>
+    </div>
+  </div>
+  <div class="chat-msgs" id="chatMsgs">
+    <div class="chat-msg bot">
+      Hello! I can help you find movies.<br>
+      Try: <code>top 5</code>, <code>search xxx</code>, <code>rank 动作, 科幻</code>, <code>like 霸王别姬</code>, <code>help</code>
+    </div>
+  </div>
+  <div class="chat-input">
+    <input id="chatInput" type="text" placeholder="Ask about movies..." onkeydown="if(event.key==='Enter')sendChat()">
+    <button onclick="sendChat()">Send</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <h3>&#9881; Settings</h3>
+    <label for="apiKey">Gemini API Key</label>
+    <input id="apiKey" type="password" placeholder="Enter your Gemini API key...">
+    <div class="hint">
+      Get a key from <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#1967d2">Google AI Studio</a>.
+      Your key is saved only in your browser.
+      <span class="saved-indicator" id="keyIndicator"></span>
+    </div>
+    <div class="btn-row">
+      <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
+      <button class="btn-save" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var activeCats = [];
+var geminiMode = false;
+
+var storedKey = localStorage.getItem("gemini_api_key") || "";
+document.getElementById("apiKey").value = storedKey;
+updateKeyIndicator();
+
+function updateKeyIndicator() {
+  var ind = document.getElementById("keyIndicator");
+  if (storedKey) {
+    ind.className = "saved-indicator set";
+    ind.title = "API key set";
+  } else {
+    ind.className = "saved-indicator unset";
+    ind.title = "No API key";
+  }
+}
+
+function openSettings() {
+  document.getElementById("apiKey").value = storedKey;
+  document.getElementById("settingsModal").classList.add("open");
+  setTimeout(function() { document.getElementById("apiKey").focus(); }, 100);
+}
+
+function closeSettings() {
+  document.getElementById("settingsModal").classList.remove("open");
+}
+
+function saveSettings() {
+  var key = document.getElementById("apiKey").value.trim();
+  storedKey = key;
+  localStorage.setItem("gemini_api_key", key);
+  updateKeyIndicator();
+  closeSettings();
+}
+
+function toggleMode() {
+  if (!storedKey && !geminiMode) {
+    openSettings();
+    return;
+  }
+  geminiMode = !geminiMode;
+  var btn = document.getElementById("modeBtn");
+  var label = document.getElementById("modeLabel");
+  if (geminiMode) {
+    btn.textContent = "Basic";
+    label.textContent = "(Gemini AI)";
+  } else {
+    btn.textContent = "Gemini";
+    label.textContent = "(basic)";
+  }
+  if (geminiMode && !storedKey) {
+    geminiMode = false;
+    btn.textContent = "Gemini";
+    label.textContent = "(basic)";
+  }
+}
+
+document.querySelectorAll(".tag").forEach(function(t) {
+  t.onclick = function() {
+    t.classList.toggle("active");
+    activeCats = [].slice.call(document.querySelectorAll(".tag.active")).map(function(e) { return e.dataset.cat; });
+    doSearch();
+  };
+});
+
+function toggleChat() {
+  var panel = document.getElementById("chatPanel");
+  panel.classList.toggle("open");
+  if (panel.classList.contains("open")) {
+    setTimeout(function() { document.getElementById("chatInput").focus(); }, 200);
+  }
+}
+
+function sendChat() {
+  var inp = document.getElementById("chatInput");
+  var msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = "";
+  var msgs = document.getElementById("chatMsgs");
+
+  msgs.innerHTML += '<div class="chat-msg user">' + msg + '</div>';
+  msgs.innerHTML += '<div class="typing"><span></span><span></span><span></span></div>';
+  msgs.scrollTop = msgs.scrollHeight;
+
+  var url = geminiMode ? "/api/chat/gemini" : "/api/chat";
+  var body = {message: msg};
+
+  if (geminiMode && storedKey) {
+    body.api_key = storedKey;
+  }
+
+  fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    msgs.removeChild(msgs.lastChild);
+    if (data.type === "movies") {
+      msgs.innerHTML += '<div class="chat-msg bot">' + data.text + '</div>';
+      if (data.movies) renderGrid(data.movies);
+    } else {
+      msgs.innerHTML += '<div class="chat-msg bot">' + data.text + '</div>';
+    }
+    msgs.scrollTop = msgs.scrollHeight;
+  })
+  .catch(function() {
+    msgs.removeChild(msgs.lastChild);
+    msgs.innerHTML += '<div class="chat-msg bot">Sorry, something went wrong.</div>';
+  });
+}
+
+function renderGrid(data) {
+  document.getElementById("stats").textContent = data.length + " movies";
+  var grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  data.forEach(function(m) {
+    var card = document.createElement("div");
+    card.className = "card";
+    var catsHtml = m.categories.map(function(c) { return '<span>' + c + '</span>'; }).join("");
+    var dateHtml = m.release_date ? '<div class="card-meta"><span>' + m.release_date + '</span></div>' : "";
+    card.innerHTML = '<img class="card-img" src="' + m.cover + '" onerror="this.style.display=\'none\'" alt="' + m.name + '">' +
+      '<div class="card-body">' +
+        '<h3>' + m.name + '</h3>' +
+        '<div class="card-meta"><span>' + m.country + '</span><span>' + m.duration + '</span></div>' +
+        '<div class="cats-inline">' + catsHtml + '</div>' +
+        dateHtml +
+        '<div class="card-score">' +
+          '<span class="score-badge">' + m.score + '</span>' +
+          '<span style="font-size:12px;color:#666">#' + m.id + '</span>' +
+        '</div>' +
+      '</div>';
+    grid.appendChild(card);
+  });
+}
+
+function doSearch() {
+  var q = document.getElementById("search").value.trim();
+  document.getElementById("loading").style.display = "block";
+  document.getElementById("grid").innerHTML = "";
+
+  var url;
+  if (activeCats.length > 0) {
+    url = "/api/rank?categories=" + activeCats.join(",");
+    if (q) url += "&q=" + encodeURIComponent(q);
+  } else if (q) {
+    url = "/api/search?q=" + encodeURIComponent(q);
+  } else {
+    url = "/api/top?n=50";
+  }
+
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.getElementById("loading").style.display = "none";
+      renderGrid(data.movies);
+    });
+}
+
+doSearch();
+</script>
+</body>
+</html>
