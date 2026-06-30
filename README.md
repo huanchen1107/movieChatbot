@@ -1,6 +1,8 @@
 # Movie Database
 
 > **100 movies** scraped from `https://ssr1.scrape.center` | avg score 8.97 | 22 categories | SQLite-powered
+>
+> **Live Demo:** [https://moviechat-qc3m9w9tj-huango-s-projects.vercel.app/](https://moviechat-qc3m9w9tj-huango-s-projects.vercel.app/)
 
 A full-stack movie data platform: SSR scraper, SQLite database, sklearn-powered ranking, FastAPI server with Gemini AI chatbot, and Excel export with embedded posters.
 
